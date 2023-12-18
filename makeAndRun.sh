@@ -1,0 +1,1 @@
+make -C build/ -s && ./build/QT_App

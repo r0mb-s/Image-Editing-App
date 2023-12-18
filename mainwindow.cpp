@@ -9,6 +9,7 @@
 #include <QThread>
 #include <QMouseEvent>
 #include <QPushButton>
+#include <QInputDialog>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -16,14 +17,16 @@ MainWindow::MainWindow(QWidget *parent)
     , stackOfStates()
     , scaleW(1)
     , pairOfPoints(nullptr, nullptr)
-    , pairOfPointsCoordinates() {
-    resize(800, 600);
+    , pairOfPointsCoordinates()
+    , drept(nullptr)
+    , painter(nullptr) {
 
     int heap_size = 10000000;
     festival_initialize(1, heap_size);
 
     fileMenu = menuBar()->addMenu("&File");
     toolsMenu = menuBar()->addMenu("&Tools");
+    textMenu = menuBar()->addMenu("&Text");
 
     imageScene = new QGraphicsScene(this);
     imageView = new QGraphicsView(imageScene);
@@ -89,6 +92,10 @@ void MainWindow::updateImageScreen(QPixmap &image) {
     imageView->scale(scaleW, scaleW);
     QString status = QString("%1x%2, %3 KB").arg(image.width()).arg(image.height()).arg(QFile(currentImagePath).size() / 1000);
     mainStatusBarLabel->setText(status);
+
+    pairOfPoints.first = nullptr;
+    pairOfPoints.second = nullptr;
+    drept = nullptr;
 }
 
 void MainWindow::createActions() {
@@ -150,6 +157,14 @@ void MainWindow::createActions() {
     rotateRightAction = new QAction("&Rotate right", this);
     toolsMenu->addAction(rotateRightAction);
     connect(rotateRightAction, SIGNAL(triggered(bool)), this, SLOT(rotateRightImage()));
+
+    addTextAction = new QAction("&Add text", this);
+    textMenu->addAction(addTextAction);
+    connect(addTextAction, SIGNAL(triggered(bool)), this, SLOT(addTextImage()));
+
+    removeTextAction = new QAction("&Remove text", this);
+    textMenu->addAction(removeTextAction);
+    connect(removeTextAction, SIGNAL(triggered(bool)), this, SLOT(removeTextImage()));
 }
 
 void MainWindow::openImage() {
@@ -224,11 +239,17 @@ void MainWindow::blurImage() {
     QPixmap image = currentImage->pixmap();
     cv::Mat mat = pixmapToMat(image);
     stackOfStates.push(mat.clone());
+    cv::Mat matBlurred = mat.clone();
 
-    cv::Mat matBlurred;
-    cv::blur(mat, matBlurred, cv::Size(8, 8));
+    if (pairOfPoints.first != nullptr && pairOfPoints.second != nullptr) {
+        int x1, y1, x2, y2;
+        getAndValidatePoints(pairOfPoints, pairOfPointsCoordinates, currentImage, x1, y1, x2, y2);
+        cv::blur(mat(cv::Rect(x1, y1, x2 - x1, y2 - y1)), matBlurred(cv::Rect(x1, y1, x2 - x1, y2 - y1)), cv::Size(12, 12));
+    } else {
+        cv::blur(mat, matBlurred, cv::Size(12, 12));
+    }
+
     image = matToPixmap(matBlurred);
-
     updateImageScreen(image);
 }
 
@@ -288,11 +309,16 @@ void MainWindow::selectTextImage() {
     QDialog *diag = new QDialog;
     diag->resize(300, 30);
     QPushButton *button = new QPushButton(text, diag);
-    // connect(button, SIGNAL(clicked()), diag, SLOT(sayThis(ocr->GetUTF8Text())));
-    connect(button, &QPushButton::clicked, this, [=]() { sayThis(ocr->GetUTF8Text()); });
+    connect(button, &QPushButton::clicked, this, [=]() {
+        std::string cuv = ocr->GetUTF8Text();
+        if (cuv.size() > 0)
+            sayThis(ocr->GetUTF8Text());
+    });
     diag->show();
 
     delete[] text;
+
+    updateImageScreen(image);
 }
 
 void MainWindow::selectFacesAndBlurImage() {
@@ -314,12 +340,21 @@ void MainWindow::selectFacesAndBlurImage() {
     qDebug() << faces.size();
 
     for (cv::Rect i : faces) {
+        if (pairOfPoints.first != nullptr)
+            if (pairOfPointsCoordinates.first.first > i.x && pairOfPointsCoordinates.first.first < i.x + i.width && pairOfPointsCoordinates.first.second > i.y && pairOfPointsCoordinates.first.second < i.y + i.height)
+                continue;
+        if (pairOfPoints.second != nullptr)
+            if (pairOfPointsCoordinates.second.first > i.x && pairOfPointsCoordinates.second.first < i.x + i.width && pairOfPointsCoordinates.second.second > i.y && pairOfPointsCoordinates.second.second < i.y + i.height)
+                continue;
         cv::Rect reg(i.x, i.y, i.width, i.height);
         cv::blur(im(reg), im(reg), cv::Size(51, 51));
     }
 
     temp = matToPixmap(im);
     updateImageScreen(temp);
+
+    pairOfPoints.first = nullptr;
+    pairOfPoints.second = nullptr;
 }
 
 void MainWindow::rotateLeftImage() {
@@ -356,7 +391,12 @@ void MainWindow::rotateRightImage() {
 
 void MainWindow::mousePressEvent(QMouseEvent *event) {
     if (currentImage == nullptr) {
+        openImage();
         return;
+    }
+    if (pairOfPoints.first != nullptr && pairOfPoints.second != nullptr) {
+        pairOfPoints.first = nullptr;
+        pairOfPoints.second = nullptr;
     }
     if (pairOfPoints.first == nullptr || pairOfPoints.second == nullptr) {
         QPointF pt = imageView->mapToScene(event->pos());
@@ -366,22 +406,66 @@ void MainWindow::mousePressEvent(QMouseEvent *event) {
         qDebug() << pt << " - " << scaleW;
 
         if (pairOfPoints.first == nullptr) {
+            if (drept) {
+                imageScene->removeItem(drept);
+                drept = nullptr;
+            }
             pairOfPoints.first = imageScene->addEllipse(pt.x(), pt.y(), 5 / scaleW, 5 / scaleW, QPen(), QBrush(Qt::SolidPattern));
             pairOfPointsCoordinates.first.first = pt.x();
             pairOfPointsCoordinates.first.second = pt.y();
-
         } else {
-            pairOfPoints.second = imageScene->addEllipse(pt.x(), pt.y(), 5 / scaleW, 5 / scaleW, QPen(), QBrush(Qt::SolidPattern));
+            pairOfPoints.second = imageScene->addEllipse(pt.x(), pt.y(), 5 / scaleW, 5 / scaleW, QPen(), QBrush(Qt::VerPattern));
             pairOfPointsCoordinates.second.first = pt.x();
             pairOfPointsCoordinates.second.second = pt.y();
-        }
 
-    } else {
-        imageScene->removeItem(pairOfPoints.first);
-        imageScene->removeItem(pairOfPoints.second);
-        pairOfPoints.first = nullptr;
-        pairOfPoints.second = nullptr;
+            int x1, y1, x2, y2;
+            getAndValidatePoints(pairOfPoints, pairOfPointsCoordinates, currentImage, x1, y1, x2, y2);
+
+            drept = imageScene->addRect(x1, y1, x2 - x1, y2 - y1, QPen(Qt::black, 5 / scaleW, Qt::DashDotLine));
+            imageScene->removeItem(pairOfPoints.first);
+            imageScene->removeItem(pairOfPoints.second);
+        }
     }
+}
+
+void MainWindow::addTextImage() {
+    bool ok;
+    QString text = QInputDialog::getText(0, "Text", "", QLineEdit::Normal, "", &ok);
+    int fontSize = QInputDialog::getInt(0, "Marimea scrisului", 0);
+    QString culoare = QInputDialog::getItem(0, "Culoare text", "", { "negru", "rosu", "galben", "albastru", "alb" });
+    QColor col;
+    if (culoare.compare("negru") == 0)
+        col.setRgb(0, 0, 0);
+    if (culoare.compare("rosu") == 0)
+        col.setRgb(255, 0, 0);
+    if (culoare.compare("galben") == 0)
+        col.setRgb(255, 255, 204);
+    if (culoare.compare("albastru") == 0)
+        col.setRgb(0, 0, 255);
+    if (culoare.compare("alb") == 0)
+        col.setRgb(255, 255, 255);
+
+    if (ok && !text.isEmpty()) {
+        QPixmap image = currentImage->pixmap();
+        cv::Mat mat = pixmapToMat(image);
+        stackOfStates.push(mat.clone());
+
+        painter = new QPainter(&image);
+        painter->setPen(QPen(col));
+        painter->setFont(QFont("Times", fontSize, QFont::Bold));
+
+        int x1, y1, x2, y2;
+        getAndValidatePoints(pairOfPoints, pairOfPointsCoordinates, currentImage, x1, y1, x2, y2);
+        painter->drawText(x1, y1, x2 - x1, y2 - y1, Qt::AlignCenter, text);
+
+        painter->end();
+
+        updateImageScreen(image);
+    }
+}
+
+void MainWindow::removeTextImage() {
+    return;
 }
 
 MainWindow::~MainWindow() {

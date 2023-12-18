@@ -45,10 +45,13 @@ private slots:
     void selectFacesAndBlurImage();
     void rotateLeftImage();
     void rotateRightImage();
+    void addTextImage();
+    void removeTextImage();
 
 private:
     QMenu *fileMenu;
     QMenu *toolsMenu;
+    QMenu *textMenu;
 
     QGraphicsScene *imageScene;
     QGraphicsView *imageView;
@@ -69,6 +72,8 @@ private:
     QAction *selectFacesAndBlurAction;
     QAction *rotateLeftAction;
     QAction *rotateRightAction;
+    QAction *addTextAction;
+    QAction *removeTextAction;
 
     QString currentImagePath;
     QGraphicsPixmapItem *currentImage;
@@ -76,6 +81,8 @@ private:
     std::stack<cv::Mat> stackOfStates;
     double scaleW;
     std::pair<QGraphicsEllipseItem *, QGraphicsEllipseItem *> pairOfPoints;
+    QGraphicsRectItem *drept;
     std::pair<std::pair<int, int>, std::pair<int, int>> pairOfPointsCoordinates;
+    QPainter *painter;
 };
 #endif // MAINWINDOW_H
